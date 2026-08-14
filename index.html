@@ -681,6 +681,46 @@
       ctx.lineWidth = 3; ctx.strokeStyle = "#fff"; ctx.stroke();
     }
 
+    // ---- overall width & height dimensions ----
+    if (showLabels){
+      var totW = maxX - minX, totH = maxY - minY;
+      var dimCol = "rgba(190,216,247,0.95)";
+      var bgCol = css.getPropertyValue("--blueprint").trim() || "#08192e";
+      var dX0 = sx(minX), dX1 = sx(maxX), dY0 = sy(minY), dY1 = sy(maxY);
+      var gap = 34, ext = 9, ah = 9;
+      ctx.save();
+      ctx.strokeStyle = dimCol; ctx.fillStyle = dimCol; ctx.lineWidth = 2;
+      ctx.font = "700 22px " + (css.getPropertyValue("--mono") || "monospace");
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var dseg = function(x1,y1,x2,y2){ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
+      var darrow = function(x,y,ang){
+        ctx.beginPath();
+        ctx.moveTo(x,y); ctx.lineTo(x - ah*Math.cos(ang-0.42), y - ah*Math.sin(ang-0.42));
+        ctx.moveTo(x,y); ctx.lineTo(x - ah*Math.cos(ang+0.42), y - ah*Math.sin(ang+0.42));
+        ctx.stroke();
+      };
+      var dchip = function(txt,x,y){
+        var w = ctx.measureText(txt).width;
+        ctx.fillStyle = bgCol; roundRect(x-w/2-7, y-15, w+14, 30, 7); ctx.fill();
+        ctx.strokeStyle = dimCol; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = dimCol; ctx.fillText(txt, x, y+1);
+        ctx.lineWidth = 2;
+      };
+      if (totW > 0.001){                                   // width, below the shape
+        var wy = Math.min(dY1 + gap, cv.height - 22);
+        ctx.globalAlpha = 0.45; dseg(dX0, dY1+ext, dX0, wy); dseg(dX1, dY1+ext, dX1, wy); ctx.globalAlpha = 1;
+        dseg(dX0, wy, dX1, wy); darrow(dX0, wy, Math.PI); darrow(dX1, wy, 0);
+        dchip(fmt(totW) + " " + unit, (dX0+dX1)/2, wy);
+      }
+      if (totH > 0.001){                                   // height, left of the shape
+        var hx = Math.max(dX0 - gap, 22);
+        ctx.globalAlpha = 0.45; dseg(dX0-ext, dY0, hx, dY0); dseg(dX0-ext, dY1, hx, dY1); ctx.globalAlpha = 1;
+        dseg(hx, dY0, hx, dY1); darrow(hx, dY0, -Math.PI/2); darrow(hx, dY1, Math.PI/2);
+        dchip(fmt(totH) + " " + unit, hx, (dY0+dY1)/2);
+      }
+      ctx.restore();
+    }
+
     function drawStart(px,py,col){
       ctx.beginPath();
       ctx.arc(px,py,8,0,Math.PI*2);
