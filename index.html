@@ -348,6 +348,12 @@
         <button class="exp-btn" id="exp-jpg" title="Image (flat background)">JPG</button>
         <button class="exp-btn" id="exp-dxf" title="CAD polyline (feet, for AutoCAD etc.)">DXF</button>
       </div>
+      <div class="export-bar">
+        <span class="export-label">Project</span>
+        <button class="exp-btn" id="save-proj" title="Save an editable project file to resume later">Save project</button>
+        <button class="exp-btn" id="open-proj" title="Open a saved project (.json) or a drawing (.dxf)">Open…</button>
+        <input type="file" id="file-in" accept=".json,.dxf,application/json" style="display:none">
+      </div>
       <div class="dl-note" id="dl-note">
         <a class="dl-a" id="dl-link" target="_blank" rel="noopener">⬇ download</a>
         <span class="dl-hint">— tap if the download didn't start on its own</span>
@@ -1098,6 +1104,101 @@
   document.getElementById("exp-png").addEventListener("click", function(){ exportImage("image/png", "png"); });
   document.getElementById("exp-jpg").addEventListener("click", function(){ exportImage("image/jpeg", "jpg", 0.92); });
   document.getElementById("exp-dxf").addEventListener("click", exportDXF);
+
+  // ---- save / open project ----
+  function exportProject(){
+    var data = {
+      app: "FoundationScan Perimeter Sketch",
+      version: 1,
+      unit: unit,
+      origin: {x: origin.x, y: origin.y},
+      segments: segs.map(function(s){ return Object.assign({}, s); })
+    };
+    offerDownload(dimName("json"), new Blob([JSON.stringify(data, null, 2)], {type:"application/json"}));
+  }
+
+  function applyLoaded(newSegs, newOrigin, newUnit){
+    pushHistory();
+    segs = newSegs;
+    origin = newOrigin || {x:0, y:0};
+    if (newUnit){ unit = newUnit; unitSel.value = unit; }
+    editIndex = null; editNode = null; selected = null;
+    [].forEach.call(pad.querySelectorAll("button"), function(b){ b.classList.remove("sel"); });
+    renderList(); draw(); updateHint();
+  }
+
+  // minimal DXF reader: pulls polyline vertices (POLYLINE/VERTEX and LWPOLYLINE) + $INSUNITS
+  function parseDXF(text){
+    var t = text.split(/\r?\n/), verts = [], closed = false, ent = null, cur = null,
+        insunits = null, pendUnit = false;
+    for (var i=0;i+1<t.length;i+=2){
+      var code = t[i].trim(), val = t[i+1].trim();
+      if (code === "9"){ pendUnit = (val === "$INSUNITS"); continue; }
+      if (pendUnit && code === "70"){ insunits = parseInt(val,10); pendUnit = false; continue; }
+      if (code === "0"){
+        if (ent === "VERTEX" && cur && cur.x != null && cur.y != null) verts.push({x:cur.x, y:cur.y});
+        cur = null; ent = val;
+        if (val === "VERTEX") cur = {x:null, y:null};
+        continue;
+      }
+      if (ent === "LWPOLYLINE"){
+        if (code === "70") closed = (parseInt(val,10) & 1) === 1;
+        else if (code === "10") verts.push({x:parseFloat(val), y:null});
+        else if (code === "20" && verts.length) verts[verts.length-1].y = parseFloat(val);
+      } else if (ent === "POLYLINE"){
+        if (code === "70") closed = (parseInt(val,10) & 1) === 1;
+      } else if (ent === "VERTEX" && cur){
+        if (code === "10") cur.x = parseFloat(val);
+        else if (code === "20") cur.y = parseFloat(val);
+      }
+    }
+    if (ent === "VERTEX" && cur && cur.x != null && cur.y != null) verts.push({x:cur.x, y:cur.y});
+    verts = verts.filter(function(v){ return v.x != null && v.y != null && isFinite(v.x) && isFinite(v.y); });
+    return {verts: verts, closed: closed, insunits: insunits};
+  }
+
+  function loadDXF(text){
+    var r = parseDXF(text);
+    if (r.verts.length < 2){ flashHint("Couldn't find a polyline in that DXF file."); return; }
+    var P = r.verts.map(function(v){ return {x:v.x, y:-v.y}; });  // DXF Y-up -> screen Y-down
+    var newSegs = [];
+    for (var i=0;i<P.length-1;i++){
+      var s = {dir:"FREE"}; setSegVec(s, P[i+1].x - P[i].x, P[i+1].y - P[i].y); newSegs.push(s);
+    }
+    if (r.closed){
+      var last = P[P.length-1], first = P[0];
+      if (Math.hypot(last.x-first.x, last.y-first.y) > 0.01){
+        var cs = {dir:"CLOSE"}; setSegVec(cs, first.x-last.x, first.y-last.y); newSegs.push(cs);
+      }
+    }
+    var uMap = {1:"in", 2:"ft", 5:"cm", 6:"m"};
+    applyLoaded(newSegs, {x:P[0].x, y:P[0].y}, uMap[r.insunits]);
+  }
+
+  function loadFile(file){
+    var reader = new FileReader();
+    reader.onload = function(){
+      var text = String(reader.result);
+      var name = (file.name || "").toLowerCase();
+      if (name.slice(-4) === ".dxf"){ loadDXF(text); return; }
+      try {
+        var d = JSON.parse(text);
+        if (!d.segments || !Array.isArray(d.segments)) throw new Error("no segments");
+        applyLoaded(d.segments.map(function(s){ return Object.assign({}, s); }), d.origin, d.unit);
+      } catch(e){
+        flashHint("That file isn't a Perimeter Sketch project or a readable DXF.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  document.getElementById("save-proj").addEventListener("click", exportProject);
+  document.getElementById("open-proj").addEventListener("click", function(){ fileIn.click(); });
+  var fileIn = document.getElementById("file-in");
+  fileIn.addEventListener("change", function(e){
+    if (e.target.files && e.target.files[0]) loadFile(e.target.files[0]);
+    e.target.value = "";   // allow re-picking the same file
+  });
 
   document.getElementById("undo").addEventListener("click", function(){
     if (history.length === 0) return;   // undoes the most recent action of any kind
