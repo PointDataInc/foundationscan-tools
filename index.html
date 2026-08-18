@@ -166,6 +166,18 @@
   }
   .dl-a:hover { background: color-mix(in srgb, var(--path) 12%, transparent); }
   .dl-hint { color: var(--muted); }
+  .info-toggle {
+    position: absolute; left: 10px; bottom: 10px;
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 1px solid rgba(158,193,255,0.45);
+    background: rgba(10,26,48,0.72);
+    color: #9ec1ff; font-family: var(--sans); font-style: italic; font-weight: 700; font-size: 15px;
+    cursor: pointer; display: grid; place-items: center; line-height: 1;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .info-toggle:hover { background: rgba(20,42,73,0.9); color: #fff; }
+  .info-toggle.off { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  #details-panel.hidden { display: none; }
 
   /* Control panel */
   .panel { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
@@ -345,7 +357,9 @@
     <section class="card canvas-card">
       <div class="canvas-hold">
         <canvas id="cv" width="1360" height="900"></canvas>
+        <button id="info-toggle" class="info-toggle" title="Hide drawing details" aria-label="Toggle drawing details">i</button>
       </div>
+      <div id="details-panel">
       <div class="readout">
         <span>Segments <b id="r-count">0</b></span>
         <span>Perimeter <b id="r-perim">0</b></span>
@@ -370,6 +384,7 @@
       <div class="dl-note" id="dl-note">
         <a class="dl-a" id="dl-link" target="_blank" rel="noopener">⬇ download</a>
         <span class="dl-hint">— tap if the download didn't start on its own</span>
+      </div>
       </div>
     </section>
 
@@ -1236,6 +1251,11 @@
   });
   document.getElementById("toggle-snap").addEventListener("change", function(e){
     snapHalf = e.target.checked;
+  });
+  document.getElementById("info-toggle").addEventListener("click", function(){
+    var hidden = document.getElementById("details-panel").classList.toggle("hidden");
+    this.classList.toggle("off", hidden);
+    this.title = hidden ? "Show drawing details" : "Hide drawing details";
   });
 
   // ---- export ----
