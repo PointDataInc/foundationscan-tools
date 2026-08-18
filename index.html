@@ -251,6 +251,8 @@
     -webkit-appearance: none;
   }
   .value-row input:focus-visible { outline: 2px solid var(--path); outline-offset: 1px; }
+  .coord-lbl { flex:1 1 0; min-width:0; display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:14px; font-weight:700; color:var(--muted); }
+  .coord-lbl input { width:100%; }
   .unit-sel {
     font-family: var(--mono); font-size: 14px;
     border: 1px solid var(--line); border-radius: 10px;
@@ -351,6 +353,7 @@
         <span>Height <b id="r-height">0</b></span>
         <span id="r-close-wrap" class="">Back to start <b id="r-close">—</b></span>
         <label class="lbl-toggle"><input type="checkbox" id="toggle-labels" checked> Show labels</label>
+        <label class="lbl-toggle"><input type="checkbox" id="toggle-snap" checked> Snap ½ ft</label>
       </div>
       <div class="export-bar">
         <span class="export-label">Save as</span>
@@ -388,8 +391,8 @@
       </div>
 
       <div>
-        <div class="step-label"><span class="step-num">2</span> Enter a distance</div>
-        <div class="value-row">
+        <div class="step-label"><span class="step-num">2</span> <span id="step2-text">Enter a distance</span></div>
+        <div class="value-row" id="dist-row">
           <input id="val" type="number" inputmode="decimal" min="0" step="any" placeholder="0" />
           <select id="unit" class="unit-sel">
             <option value="ft" selected>ft</option>
@@ -397,6 +400,10 @@
             <option value="in">in</option>
             <option value="cm">cm</option>
           </select>
+        </div>
+        <div class="value-row" id="coord-row" style="display:none">
+          <label class="coord-lbl">X <input id="coord-x" type="number" step="any" inputmode="decimal" /></label>
+          <label class="coord-lbl">Y <input id="coord-y" type="number" step="any" inputmode="decimal" /></label>
         </div>
       </div>
 
@@ -441,6 +448,7 @@
   var selected = null;      // current heading
   var unit = "ft";
   var showLabels = true;    // draw segment length labels on the canvas
+  var snapHalf = true;      // snap typed distances & coordinates to the nearest 0.5
   var editIndex = null;     // index of segment selected for arrow-key moving
   var editNode = null;      // index of corner (vertex) selected for moving
   var origin = {x:0, y:0};  // start point; can shift when the first segment is moved
@@ -469,6 +477,11 @@
   var pad = document.getElementById("pad");
   var valInput = document.getElementById("val");
   var unitSel = document.getElementById("unit");
+  var distRow = document.getElementById("dist-row");
+  var coordRow = document.getElementById("coord-row");
+  var coordX = document.getElementById("coord-x");
+  var coordY = document.getElementById("coord-y");
+  var step2Text = document.getElementById("step2-text");
   var addBtn = document.getElementById("add");
   var closeBtn = document.getElementById("close-loop");
   var hint = document.getElementById("hint");
@@ -515,7 +528,7 @@
     var len = Math.hypot(vx, vy);
     if (len < 1e-9){ seg.val = 0; return; }
     var ux = vx/len, uy = vy/len;
-    seg.val = Math.round(len * 100) / 100;
+    seg.val = Math.round(len * 1e6) / 1e6;   // fine precision so moves don't drift the loop open
     if (seg.dir === "CLOSE"){ seg.x = ux; seg.y = uy; return; }
     for (var k in VEC){
       if (Math.abs(ux-VEC[k].x) < 1e-4 && Math.abs(uy-VEC[k].y) < 1e-4){
@@ -561,6 +574,18 @@
   function fmt(n){
     var r = Math.round(n*100)/100;
     return (r % 1 === 0) ? String(r) : r.toFixed(2).replace(/0$/,"");
+  }
+  // round a value to the nearest 0.5 (when snapping on) or to 2 decimals otherwise
+  // delta along one axis to reach the next grid line (spacing g) in direction dir.
+  // Corners on diagonal walls carry small floating-point drift, so treat anything within
+  // TOL of a grid line as being ON it — otherwise the step can round to ~0 and the corner
+  // looks frozen (the "very delayed" bug).
+  function gridStep(v, dir, g){
+    if (!dir) return 0;
+    var TOL = 0.02;
+    var nearest = Math.round(v / g) * g;
+    if (Math.abs(v - nearest) <= TOL) return (nearest + dir * g) - v;   // on a line -> full cell
+    return (dir > 0 ? Math.ceil(v / g) : Math.floor(v / g)) * g - v;    // off-grid -> snap to next line
   }
 
   // ---- rendering ----
@@ -717,7 +742,7 @@
       var mkHandle = function(p, n){
         var ax=sx(p.x), ay=sy(p.y), bx=sx(n.x), by=sy(n.y);
         var dx=ax-bx, dy=ay-by, L=Math.hypot(dx,dy)||1;
-        return {x: ax + dx/L*42, y: ay + dy/L*42};
+        return {x: ax + dx/L*60, y: ay + dy/L*60};
       };
       var hS = mkHandle(pts[0], pts[1]);
       var hE = mkHandle(pts[pts.length-1], pts[pts.length-2]);
@@ -844,7 +869,7 @@
       else cw.className="warn";
     }
     // close-loop button: enabled once there are 2+ segments and we're not already back at start
-    var closable = segs.length >= 2 && closureDist() > 0.01;
+    var closable = segs.length >= 2 && !isClosed() && closureDist() > 0.01;
     closeBtn.disabled = !closable;
     closeBtn.textContent = closable
       ? "⟲ Close loop (" + fmt(closureDist()) + " " + unit + ")"
@@ -870,11 +895,41 @@
     flashTimer = setTimeout(updateHint, 2600);
   }
 
+  // when a corner is selected, show its X,Y (2 decimals) and let it be edited
+  function updateCoordEditor(){
+    if (editNode !== null){
+      var pt = points()[editNode];
+      if (pt && document.activeElement !== coordX && document.activeElement !== coordY){
+        coordX.value = (Math.round(pt.x*100)/100).toFixed(2);
+        coordY.value = (Math.round(pt.y*100)/100).toFixed(2);
+      }
+      distRow.style.display = "none";
+      coordRow.style.display = "flex";
+      step2Text.textContent = "Corner position \u2014 X, Y (" + unit + ")";
+    } else {
+      distRow.style.display = "flex";
+      coordRow.style.display = "none";
+      step2Text.textContent = "Enter a distance";
+    }
+  }
+  // move the selected corner to the typed X,Y
+  function applyCoord(){
+    if (editNode === null) return;
+    var pt = points()[editNode];
+    if (!pt) return;
+    var X = parseFloat(coordX.value), Y = parseFloat(coordY.value);
+    if (isNaN(X) || isNaN(Y)){ updateCoordEditor(); return; }
+    var dx = X - pt.x, dy = Y - pt.y;
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return;
+    moveNode(editNode, dx, dy);   // pushes history + redraws; fields refresh via updateHint
+  }
+
   function updateHint(){
     updatePadCenter();
+    updateCoordEditor();
     if (editNode !== null){
       var nm = (editNode === 0) ? "the start corner" : "corner " + editNode;
-      hint.innerHTML = "Moving <b>"+nm+"</b> — arrows/pad move it, <span class='k'>Shift</span> for ½. <span class='k'>✕ Delete</span> (or the <span class='k'>Delete</span> key) removes it. <span class='k'>Esc</span> to finish.";
+      hint.innerHTML = "Moving <b>"+nm+"</b> — arrows/pad " + (snapHalf ? "snap to ½ ft (<span class='k'>Shift</span> = whole ft)" : "move ±1 (<span class='k'>Shift</span> = ½)") + ". <span class='k'>✕ Delete</span> removes it. <span class='k'>Esc</span> to finish.";
       addBtn.disabled = true;
       addBtn.textContent = "Add segment";
       return;
@@ -883,7 +938,7 @@
       var es = segs[editIndex];
       var g = es.dir === "CLOSE" ? "⟲" : es.dir === "FREE" ? "↦" : VEC[es.dir].g;
       hint.innerHTML = "Moving segment <b>"+(editIndex+1)+"</b> "+g+" ("+fmt(es.val)+" "+unit+
-        ") — arrows/pad slide it (<span class='k'>Shift</span> = ½). <span class='k'>＋ Add node</span> splits it at the middle. <span class='k'>Esc</span> to finish.";
+        ") — arrows/pad " + (snapHalf ? "snap ½ ft (<span class='k'>Shift</span> = whole ft)" : "slide ±1 (<span class='k'>Shift</span> = ½)") + ". <span class='k'>＋ Add node</span> splits it. <span class='k'>Esc</span> to finish.";
       addBtn.disabled = true;
       addBtn.textContent = "Add segment";
       return;
@@ -944,7 +999,7 @@
     var gap = Math.hypot(last.x - p0.x, last.y - p0.y);
     var FEET = {ft:1, in:12, m:0.3048, cm:30.48};
     var thr = (FEET[unit] || 1);                   // 1 foot expressed in the current unit
-    if (gap <= 1e-4 || gap > thr) return;
+    if (gap > thr) return;
     var li = segs.length - 1;
     if (activeEnd === "start"){
       var delta = {x: last.x - p0.x, y: last.y - p0.y};   // slide the start node onto the far end
@@ -956,6 +1011,16 @@
       segs[li].dir = "CLOSE"; setSegVec(segs[li], p0.x - prev.x, p0.y - prev.y);
     }
     flashHint("Ends within 1 ft \u2014 snapped closed.");
+  }
+
+  // if a move lands the open end exactly on the start, finalize the closing wall
+  function autoCloseIfCoincident(){
+    if (segs.length < 3 || segs[segs.length-1].dir === "CLOSE") return;
+    if (closureDist() >= 0.01) return;
+    var pts = points(), prev = pts[pts.length-2];
+    segs[segs.length-1].dir = "CLOSE";
+    setSegVec(segs[segs.length-1], pts[0].x - prev.x, pts[0].y - prev.y);
+    editNode = null; editIndex = null;
   }
 
   // select a segment for arrow-key resizing (toggle off if already selected)
@@ -996,6 +1061,7 @@
       var nv = segVec(segs[i+1]);
       setSegVec(segs[i+1], nv.x - dx, nv.y - dy);    // next segment absorbs the move
     }
+    autoCloseIfCoincident();
     renderList(); draw(); updateHint();
   }
 
@@ -1013,6 +1079,7 @@
       if (j-1 < N){ var vi = segVec(segs[j-1]); setSegVec(segs[j-1], vi.x + dx, vi.y + dy); } // incoming wall
       if (j < N){   var vo = segVec(segs[j]);   setSegVec(segs[j],   vo.x - dx, vo.y - dy); } // outgoing wall
     }
+    autoCloseIfCoincident();
     renderList(); draw(); updateHint();
   }
 
@@ -1026,7 +1093,21 @@
   }
 
   // route arrow/pad moves to whichever thing is selected
-  function moveSelection(dx, dy){
+  // move the selection one step. ux,uy = direction (unit vector); shift = coarser (whole-ft) step.
+  // With snapping on, jump to the next grid line so off-grid corners land on the grid.
+  function moveSelection(ux, uy, shift){
+    var dx, dy;
+    if (snapHalf){
+      var g = shift ? 1 : 0.5;                       // plain = 0.5 ft, Shift = whole ft
+      var ref = (editNode !== null) ? points()[editNode]
+              : (editIndex !== null) ? points()[editIndex] : null;
+      if (!ref) return;
+      dx = ux !== 0 ? gridStep(ref.x, ux, g) : 0;
+      dy = uy !== 0 ? gridStep(ref.y, uy, g) : 0;
+    } else {
+      var step = shift ? 0.5 : 1;                     // freeform: fixed step, keeps offsets
+      dx = ux * step; dy = uy * step;
+    }
     if (editNode !== null) moveNode(editNode, dx, dy);
     else if (editIndex !== null) moveSegment(dx, dy);
   }
@@ -1093,8 +1174,7 @@
     // while a segment or corner is selected, the pad moves it (all 8 directions)
     if (editIndex !== null || editNode !== null){
       var v = VEC[dir];
-      var step = e.shiftKey ? 0.5 : 1;
-      moveSelection(v.x * step, v.y * step);
+      moveSelection(v.x, v.y, e.shiftKey);
       return;
     }
     selected = dir;
@@ -1143,8 +1223,14 @@
     if (e.key === "Enter"){ e.preventDefault(); commit(); }
   });
   unitSel.addEventListener("change", function(){ unit = unitSel.value; renderList(); updateHint(); });
+  function coordKey(e){ if (e.key === "Enter"){ e.preventDefault(); applyCoord(); } }
+  coordX.addEventListener("keydown", coordKey);
+  coordY.addEventListener("keydown", coordKey);
   document.getElementById("toggle-labels").addEventListener("change", function(e){
     showLabels = e.target.checked; draw();
+  });
+  document.getElementById("toggle-snap").addEventListener("change", function(e){
+    snapHalf = e.target.checked;
   });
 
   // ---- export ----
@@ -1406,10 +1492,10 @@
   var HIT = 26;       // canvas-pixel pick radius for a segment
   var NODE_HIT = 24;  // canvas-pixel pick radius for a corner (takes priority)
   cv.addEventListener("click", function(e){
-    var h = handleAtEvent(e);
-    if (h){ setActiveEnd(h); return; }
     var node = nodeAtEvent(e);
     if (node.index >= 0 && node.dist <= NODE_HIT){ selectNode(node.index); return; }
+    var h = handleAtEvent(e);
+    if (h){ setActiveEnd(h); return; }
     var hit = segAtEvent(e);
     if (hit.index >= 0 && hit.dist <= HIT){ selectSegment(hit.index); return; }
     if (editIndex !== null || editNode !== null){        // click empty space to deselect
@@ -1427,6 +1513,11 @@
   // keyboard: arrow keys pick cardinal directions
   var lastArrow = { dir: null, t: 0 };
   document.addEventListener("keydown", function(e){
+    // let the X/Y fields handle their own keys (Backspace/arrows/Enter)
+    if (e.target === coordX || e.target === coordY){
+      if (e.key === "Escape"){ e.target.blur(); editNode = null; renderList(); draw(); updateHint(); }
+      return;
+    }
     // finish editing
     if (e.key === "Escape" && (editIndex !== null || editNode !== null)){
       editIndex = null; editNode = null; renderList(); draw(); updateHint(); return;
@@ -1441,8 +1532,7 @@
       if (!mv) return;
       e.preventDefault();
       if (e.repeat) return;
-      var step = e.shiftKey ? 0.5 : 1;
-      moveSelection(mv[0]*step, mv[1]*step);
+      moveSelection(mv[0], mv[1], e.shiftKey);
       return;
     }
     var map = {ArrowUp:"N", ArrowRight:"E", ArrowDown:"S", ArrowLeft:"W"};
