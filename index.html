@@ -1061,6 +1061,11 @@
       var nv = segVec(segs[i+1]);
       setSegVec(segs[i+1], nv.x - dx, nv.y - dy);    // next segment absorbs the move
     }
+    // moving the first wall shifts the start; carry the closing wall's end with it so the loop stays closed
+    if (i === 0 && segs.length > 1 && segs[segs.length-1].dir === "CLOSE"){
+      var vc = segVec(segs[segs.length-1]);
+      setSegVec(segs[segs.length-1], vc.x + dx, vc.y + dy);
+    }
     autoCloseIfCoincident();
     renderList(); draw(); updateHint();
   }
